@@ -15,6 +15,10 @@ SET_LOOP_TASK_STACK_SIZE(16 * 1024); // 16KB, GitHub responses are heavy
 #define OTA_VERSION "local_development"
 #endif
 
+#ifndef UTC_OFFSET
+#define UTC_OFFSET +1
+#endif
+
 #pragma region HelperFunctions
 String getMacAddress()
 {
@@ -193,6 +197,8 @@ namespace OTA
 
             return_object.name = release_response["name"].as<String>();
             return_object.published_at = http_ota->formatTimeFromISO8601(release_response["published_at"].as<String>());
+
+            return_object.published_at = return_object.published_at + (UTC_OFFSET) * 3600; // Adjust to local timezone
 
             // Evaluate comparison based on metadata
             bool update_is_different = release_response["name"].as<String>().compareTo(OTA_VERSION) != 0;
