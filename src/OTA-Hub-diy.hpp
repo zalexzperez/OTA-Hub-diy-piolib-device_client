@@ -182,9 +182,10 @@ namespace OTA
             JsonDocument release_response;
             deserializeJson(release_response, response.body);
             if (
-                !release_response.containsKey("name") ||
-                !release_response.containsKey("published_at") ||
-                !release_response.containsKey("assets"))
+                !release_response["name"].is<const char *>() ||
+                !release_response["published_at"].is<const char *>() ||
+                !release_response["assets"].is<JsonArray>() ||
+                !release_response["tag_name"].is<const char *>())
             {
                 Serial.println("The latest release contains no assets and/or metadata. We can't continue...");
                 return return_object;
