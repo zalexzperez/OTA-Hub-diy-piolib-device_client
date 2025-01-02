@@ -201,8 +201,11 @@ namespace OTA
             return_object.published_at = return_object.published_at + (UTC_OFFSET) * 3600; // Adjust to local timezone
 
             // Evaluate comparison based on metadata
-            bool update_is_different = release_response["name"].as<String>().compareTo(OTA_VERSION) != 0;
-            bool update_is_newer = release_response["published_at"].as<time_t>() > cvtDate();
+            bool update_is_different = release_response["tag_name"].as<String>().compareTo(OTA_VERSION) != 0;
+            Serial.printf("Update is %s", update_is_different ? "different\n" : "not different\n");
+
+            bool update_is_newer = return_object.published_at > cvtDate();
+            Serial.printf("Update is %s", update_is_newer ? "newer\n" : "older\n");
 
             JsonArray asset_array = release_response["assets"].as<JsonArray>();
             for (JsonVariant v : asset_array)
