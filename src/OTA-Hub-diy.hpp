@@ -1,6 +1,6 @@
 #pragma once
-#define HTTP_MAX_HEADERS 30          // GitHub sends ~28 headers back!
-SET_LOOP_TASK_STACK_SIZE(16 * 1024); // 16KB, GitHub responses are heavy
+#define HTTP_MAX_HEADERS 30 // GitHub sends ~28 headers back!
+// SET_LOOP_TASK_STACK_SIZE(16 * 1024); // 16KB, GitHub responses are heavy
 
 // libs
 #include <Hard-Stuff-Http.hpp>
@@ -161,6 +161,32 @@ namespace OTA
 
 #pragma region CoreFunctions
 
+    // Structure to track progress
+    struct UpdateProgress
+    {
+        size_t totalBytes;
+        size_t currentBytes;
+        float percentage;
+    };
+
+    static UpdateProgress currentProgress = {0, 0, 0.0f};
+
+    // Helper function to retrieve progress
+    UpdateProgress getUpdateProgress()
+    {
+        return currentProgress;
+    }
+
+    // Progress callback for Update class
+    void onProgress(size_t progress, size_t total)
+    {
+        currentProgress.currentBytes = progress;
+        currentProgress.totalBytes = total;
+        currentProgress.percentage = (float)progress * 100 / total;
+
+        Serial.printf("Progress: %.2f%%\n", (float)currentProgress.percentage);
+    }
+
     /**
      * @brief Check GitHub to see if an update is available
      *
@@ -302,6 +328,15 @@ namespace OTA
             if (contentLength && isValidContentType)
             {
                 Serial.println("firmware.bin is good. Beginning the OTA update, this may take a while...");
+
+                // Initialize progress tracking
+                currentProgress.totalBytes = contentLength;
+                currentProgress.currentBytes = 0;
+                currentProgress.percentage = 0;
+
+                // Set up progress callback
+                Update.onProgress(onProgress);
+
                 if (Update.begin(contentLength))
                 {
                     Update.writeStream(*http_ota);
