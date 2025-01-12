@@ -92,6 +92,7 @@ namespace OTA
         UpdateCondition condition;
         String name;
         time_t published_at;
+        String tag_name;
         String firmware_asset_id;
         String firmware_asset_endpoint;
         String redirect_server;
@@ -108,6 +109,7 @@ namespace OTA
             print_stream->println("------------------------");
             print_stream->println("Condition: " + String(condition_strings[condition]));
             print_stream->println("name: " + name);
+            print_stream->println("tag_name: " + String(tag_name));
             print_stream->println("published_at: " + http_ota->formatTimeISO8601(published_at));
             print_stream->println("firmware_asset_id: " + String(firmware_asset_id));
             print_stream->println("firmware_asset_endpoint: " + String(firmware_asset_endpoint));
@@ -225,8 +227,8 @@ namespace OTA
 
             return_object.name = release_response["name"].as<String>();
             return_object.published_at = http_ota->formatTimeFromISO8601(release_response["published_at"].as<String>());
-
             return_object.published_at = return_object.published_at + (UTC_OFFSET) * 3600; // Adjust to local timezone
+            return_object.tag_name = release_response["tag_name"].as<String>();
 
             // Evaluate comparison based on metadata
             bool update_is_different = release_response["tag_name"].as<String>().compareTo(OTA_VERSION) != 0;
