@@ -7,6 +7,7 @@
 #include <Update.h>
 #include <ArduinoJson.h>
 #include <TimeLib.h>
+#include "ui/vars.h"
 
 #include <ota-github-defaults.h>
 #include <ota-github-cacerts.h>
@@ -185,6 +186,7 @@ namespace OTA
         currentProgress.percentage = (float)progress * 100 / total;
 
         Serial.printf("Progress: %.2f%%\n", (float)currentProgress.percentage);
+        set_var_update_percentage((int)currentProgress.percentage);
     }
 
     /**
