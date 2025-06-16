@@ -227,7 +227,7 @@ namespace OTA
 
             return_object.name = release_response["name"].as<String>();
             return_object.published_at = http_ota->formatTimeFromISO8601(release_response["published_at"].as<String>());
-            return_object.published_at = return_object.published_at + (UTC_OFFSET) * 3600; // Adjust to local timezone
+            return_object.published_at = return_object.published_at + (UTC_OFFSET+1) * 3600; // Adjust to local timezone and account for DST
             return_object.tag_name = release_response["tag_name"].as<String>();
 
             // Evaluate comparison based on metadata
