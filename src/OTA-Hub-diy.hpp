@@ -227,7 +227,7 @@ namespace OTA
 
             return_object.name = release_response["name"].as<String>();
             return_object.published_at = http_ota->formatTimeFromISO8601(release_response["published_at"].as<String>());
-            return_object.published_at = return_object.published_at + (UTC_OFFSET+1) * 3600; // Adjust to local timezone and account for DST
+            return_object.published_at = return_object.published_at + (UTC_OFFSET + 1) * 3600; // Adjust to local timezone and account for DST
             return_object.tag_name = release_response["tag_name"].as<String>();
 
             // Evaluate comparison based on metadata
@@ -237,19 +237,33 @@ namespace OTA
             bool update_is_newer = return_object.published_at > cvtDate();
             Serial.printf("Update is %s", update_is_newer ? "newer\n" : "older\n");
 
+            // Build expected firmware name based on current hardware
+            String expected_firmware_name = "firmware-" + String(HW_MODEL) + "-rev" + String(HW_REVISION) + ".bin";
+            Serial.printf("Looking for firmware asset: %s\n", expected_firmware_name.c_str());
+
             JsonArray asset_array = release_response["assets"].as<JsonArray>();
+            bool compatible_firmware_found = false;
             for (JsonVariant v : asset_array)
             {
-                if (v["name"].as<String>().compareTo("firmware.bin") == 0)
+                String asset_name = v["name"].as<String>();
+                Serial.printf("Found asset: %s\n", asset_name.c_str());
+
+                if (asset_name.compareTo(expected_firmware_name) == 0)
                 {
+                    compatible_firmware_found = true;
                     return_object.firmware_asset_id = v["id"].as<String>();
                     return_object.condition = update_is_different ? (update_is_newer ? NEW_DIFFERENT : OLD_DIFFERENT) : (update_is_newer ? NEW_SAME : NO_UPDATE);
                     return_object.firmware_asset_endpoint = OTAGH_BIN_PATH + return_object.firmware_asset_id;
+                    Serial.println("Compatible firmware found!");
                     return return_object;
                 }
             }
-            Serial.println("The latest release contains no firmware asset. We can't continue...");
-            return return_object;
+            if (!compatible_firmware_found)
+            {
+                Serial.printf("No compatible firmware found for %s rev%d\n", HW_MODEL, HW_REVISION);
+                return_object.condition = NO_UPDATE; // Or create a new condition like INCOMPATIBLE_HARDWARE
+                return return_object;
+            }
         }
 
         Serial.println("Failed to connect to GitHub. Check your OTAGH_... #defines.");
