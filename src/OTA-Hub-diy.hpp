@@ -7,7 +7,9 @@
 #include <Update.h>
 #include <ArduinoJson.h>
 #include <TimeLib.h>
-#include "ui/vars.h"
+#ifdef HW_MODEL_IPC
+#include "ui/variants/ipc/vars.h"
+#endif
 
 #include <ota-github-defaults.h>
 #include <ota-github-cacerts.h>
