@@ -9,6 +9,8 @@
 #include <TimeLib.h>
 #ifdef HW_MODEL_IPC
 #include "ui/variants/ipc/vars.h"
+#elif HW_MODEL_AIRV
+#include "ui/variants/airv/vars.h"
 #endif
 
 #include <ota-github-defaults.h>
