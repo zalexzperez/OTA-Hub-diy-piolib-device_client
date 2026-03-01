@@ -20,44 +20,6 @@
 #define OTA_VERSION "local_development"
 #endif
 
-#ifndef UTC_OFFSET
-#define UTC_OFFSET +1
-#endif
-
-#pragma region HelperFunctions
-String getMacAddress()
-{
-    uint8_t baseMac[6];
-    // Get MAC address for WiFi station
-    esp_read_mac(baseMac, ESP_MAC_WIFI_STA);
-    char baseMacChr[18] = {0};
-    sprintf(baseMacChr, "%02X:%02X:%02X:%02X:%02X:%02X", baseMac[0], baseMac[1], baseMac[2], baseMac[3], baseMac[4], baseMac[5]);
-    return String(baseMacChr);
-}
-
-time_t cvtDate()
-{
-    char s_month[5];
-    int year;
-    tmElements_t t;
-    static const char month_names[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
-
-    sscanf(__DATE__, "%s %hhd %d", s_month, &t.Day, &year);
-    sscanf(__TIME__, "%2hhd %*c %2hhd %*c %2hhd", &t.Hour, &t.Minute, &t.Second);
-
-    // Find where is s_month in month_names. Deduce month value.
-    t.Month = (strstr(month_names, s_month) - month_names) / 3 + 1;
-
-    // year can be given as '2010' or '10'. It is converted to years since 1970
-    if (year > 99)
-        t.Year = year - 1970;
-    else
-        t.Year = year + 30;
-
-    return makeTime(t);
-}
-#pragma endregion
-
 namespace OTA
 {
 #pragma region WorkingVariabls
@@ -72,10 +34,8 @@ namespace OTA
      */
     enum UpdateCondition
     {
-        NO_UPDATE,     // The proposed release is the same name and same age as this one (i.e. they're the same)
-        OLD_DIFFERENT, // The proposed release is different to what we've got here (but it's older)
-        NEW_SAME,      // The proposed release is newer but has the same name as this one (are you versioning correctly?)
-        NEW_DIFFERENT  // The proposed update is both newer and has a different name (so is likely to be a legitimate update)
+        NO_UPDATE,       // The remote release tag matches the local OTA_VERSION (or no compatible firmware found)
+        UPDATE_AVAILABLE // The remote release tag differs from the local OTA_VERSION — a legitimate update
     };
 
     /**
@@ -89,7 +49,7 @@ namespace OTA
     };
 
     /**
-     * @brief Everything necesary related to a firmware release
+     * @brief Everything necessary related to a firmware release
      */
     struct UpdateObject
     {
@@ -103,13 +63,8 @@ namespace OTA
 
         void print(Stream *print_stream = &Serial)
         {
-            const char *condition_strings[] = {
-                "NO_UPDATE",
-                "OLD_DIFFERENT",
-                "NEW_SAME",
-                "NEW_DIFFERENT"};
+            const char *condition_strings[] = {"NO_UPDATE", "UPDATE_AVAILABLE"};
 
-            // Print condition
             print_stream->println("------------------------");
             print_stream->println("Condition: " + String(condition_strings[condition]));
             print_stream->println("name: " + name);
@@ -122,14 +77,18 @@ namespace OTA
     };
 #pragma endregion
 
-#pragma region SupportFunctions
-    void confirmConnected()
+#pragma region HelperFunctions
+    String getMacAddress()
     {
-        if (http_ota->connected())
-        {
-        }
+        uint8_t baseMac[6];
+        esp_read_mac(baseMac, ESP_MAC_WIFI_STA);
+        char baseMacChr[18] = {0};
+        sprintf(baseMacChr, "%02X:%02X:%02X:%02X:%02X:%02X", baseMac[0], baseMac[1], baseMac[2], baseMac[3], baseMac[4], baseMac[5]);
+        return String(baseMacChr);
     }
+#pragma endregion
 
+#pragma region SupportFunctions
     void printFirmwareDetails(Stream *print_stream = &Serial)
     {
         print_stream->println("------------------------");
@@ -137,6 +96,21 @@ namespace OTA
         print_stream->println("Firmware Version: " + (String)OTA_VERSION);
         print_stream->println("Firmware Compilation Date: " + (String)__DATE__ + ", " + (String)__TIME__);
         print_stream->println("------------------------");
+    }
+
+    bool isReleaseNewer(const String &remote, const String &local)
+    {
+        int r_major = 0, r_minor = 0, r_patch = 0;
+        int l_major = 0, l_minor = 0, l_patch = 0;
+
+        sscanf(remote.c_str(), "%d.%d.%d", &r_major, &r_minor, &r_patch);
+        sscanf(local.c_str(), "%d.%d.%d", &l_major, &l_minor, &l_patch);
+
+        if (r_major != l_major)
+            return r_major > l_major;
+        if (r_minor != l_minor)
+            return r_minor > l_minor;
+        return r_patch > l_patch;
     }
 
     void deinit()
@@ -214,63 +188,62 @@ namespace OTA
 
         HardStuffHttpResponse response = http_ota->getFromHTTPServer(String(OTAGH_CHECK_PATH), &request);
 
-        if (response.success())
+        if (!response.success())
         {
-            // Compile into a JSON doc
-            JsonDocument release_response;
-            deserializeJson(release_response, response.body);
-            if (
-                !release_response["name"].is<const char *>() ||
-                !release_response["published_at"].is<const char *>() ||
-                !release_response["assets"].is<JsonArray>() ||
-                !release_response["tag_name"].is<const char *>())
+            Serial.printf("Failed to get update info from GitHub. Check your OTAGH_... #defines.\n");
+            return return_object;
+        }
+
+        // Compile into a JSON doc
+        JsonDocument release_response;
+        deserializeJson(release_response, response.body);
+        if (!release_response["name"].is<const char *>() || !release_response["published_at"].is<const char *>() || !release_response["assets"].is<JsonArray>() ||
+            !release_response["tag_name"].is<const char *>())
+        {
+            Serial.println("The latest release contains no assets and/or metadata. We can't continue...");
+            return return_object;
+        }
+
+        return_object.name = release_response["name"].as<String>();
+        return_object.published_at = http_ota->formatTimeFromISO8601(release_response["published_at"].as<String>());
+        return_object.tag_name = release_response["tag_name"].as<String>();
+
+        // Strip leading 'v' from GitHub tag before comparing (e.g. "v1.1.1" -> "1.1.1")
+        String remote_version = return_object.tag_name;
+        if (remote_version.startsWith("v") || remote_version.startsWith("V"))
+        {
+            remote_version = remote_version.substring(1);
+        }
+
+        bool update_is_available = isReleaseNewer(remote_version, OTA_VERSION);
+        Serial.printf("Remote version: %s | Local version: %s | Update: %s\n", remote_version.c_str(), OTA_VERSION, update_is_available ? "available" : "not available");
+
+        if (!update_is_available)
+        {
+            return return_object; // condition is already NO_UPDATE
+        }
+
+        // Build expected firmware name based on current hardware
+        String expected_firmware_name = "firmware-" + String(HW_MODEL) + "-rev" + String(HW_REVISION) + ".bin";
+        Serial.printf("Looking for firmware asset: %s\n", expected_firmware_name.c_str());
+
+        JsonArray asset_array = release_response["assets"].as<JsonArray>();
+        for (JsonVariant v : asset_array)
+        {
+            String asset_name = v["name"].as<String>();
+            Serial.printf("Found asset: %s\n", asset_name.c_str());
+
+            if (asset_name.compareTo(expected_firmware_name) == 0)
             {
-                Serial.println("The latest release contains no assets and/or metadata. We can't continue...");
-                return return_object;
-            }
-
-            return_object.name = release_response["name"].as<String>();
-            return_object.published_at = http_ota->formatTimeFromISO8601(release_response["published_at"].as<String>());
-            return_object.published_at = return_object.published_at + (UTC_OFFSET + 1) * 3600; // Adjust to local timezone and account for DST
-            return_object.tag_name = release_response["tag_name"].as<String>();
-
-            // Evaluate comparison based on metadata
-            bool update_is_different = release_response["tag_name"].as<String>().compareTo(OTA_VERSION) != 0;
-            Serial.printf("Update is %s", update_is_different ? "different\n" : "not different\n");
-
-            bool update_is_newer = return_object.published_at > cvtDate();
-            Serial.printf("Update is %s", update_is_newer ? "newer\n" : "older\n");
-
-            // Build expected firmware name based on current hardware
-            String expected_firmware_name = "firmware-" + String(HW_MODEL) + "-rev" + String(HW_REVISION) + ".bin";
-            Serial.printf("Looking for firmware asset: %s\n", expected_firmware_name.c_str());
-
-            JsonArray asset_array = release_response["assets"].as<JsonArray>();
-            bool compatible_firmware_found = false;
-            for (JsonVariant v : asset_array)
-            {
-                String asset_name = v["name"].as<String>();
-                Serial.printf("Found asset: %s\n", asset_name.c_str());
-
-                if (asset_name.compareTo(expected_firmware_name) == 0)
-                {
-                    compatible_firmware_found = true;
-                    return_object.firmware_asset_id = v["id"].as<String>();
-                    return_object.condition = update_is_different ? (update_is_newer ? NEW_DIFFERENT : OLD_DIFFERENT) : (update_is_newer ? NEW_SAME : NO_UPDATE);
-                    return_object.firmware_asset_endpoint = OTAGH_BIN_PATH + return_object.firmware_asset_id;
-                    Serial.println("Compatible firmware found!");
-                    return return_object;
-                }
-            }
-            if (!compatible_firmware_found)
-            {
-                Serial.printf("No compatible firmware found for %s rev%d\n", HW_MODEL, HW_REVISION);
-                return_object.condition = NO_UPDATE; // Or create a new condition like INCOMPATIBLE_HARDWARE
+                return_object.firmware_asset_id = v["id"].as<String>();
+                return_object.condition = update_is_available ? UPDATE_AVAILABLE : NO_UPDATE;
+                return_object.firmware_asset_endpoint = OTAGH_BIN_PATH + return_object.firmware_asset_id;
+                Serial.println("Compatible firmware found!");
                 return return_object;
             }
         }
 
-        Serial.println("Failed to connect to GitHub. Check your OTAGH_... #defines.");
+        Serial.printf("No compatible firmware found for %s rev%d\n", HW_MODEL, HW_REVISION);
         return return_object;
     }
 
@@ -286,7 +259,6 @@ namespace OTA
         Serial.println("Fetching update from: " + (details->redirect_server.isEmpty() ? String(OTAGH_SERVER) : details->redirect_server) + details->firmware_asset_endpoint);
 
         HardStuffHttpRequest request;
-        // Headers
         request.addHeader("Accept", "application/octet-stream");
 #ifdef OTAGH_BEARER
         request.addHeader("Authorization", "Bearer " + String(OTAGH_BEARER));
@@ -297,8 +269,6 @@ namespace OTA
 
         if (response.status_code == 302)
         {
-            // Do redirect logic
-            // Extract URL from "Location"
             String URL = "";
             for (int i = 0; i < response.header_count; i++)
             {
@@ -314,7 +284,6 @@ namespace OTA
                 Serial.println("We can't continue.");
                 return FAILED_TO_DOWNLOAD;
             }
-            // Get .com/ (or other part);
             URL.replace("https://", "");
             URL.replace("http://", "");
             int slash_index = URL.indexOf("/");
@@ -328,10 +297,9 @@ namespace OTA
 
         if (response.status_code >= 200 && response.status_code < 300)
         {
-            // we can download as normal
             Serial.println("firmware.bin found. Checking validity.");
-            int contentLength;
-            bool isValidContentType;
+            int contentLength = 0;
+            bool isValidContentType = false;
 
             for (int i_header = 0; i_header < response.header_count; i_header++)
             {
@@ -342,8 +310,7 @@ namespace OTA
                 if (response.headers[i_header].key.compareTo("Content-Type") == 0)
                 {
                     String contentType = response.headers[i_header].value;
-                    isValidContentType =
-                        contentType == "application/octet-stream" || contentType == "application/macbinary";
+                    isValidContentType = contentType == "application/octet-stream" || contentType == "application/macbinary";
                 }
             }
 
@@ -351,12 +318,10 @@ namespace OTA
             {
                 Serial.println("firmware.bin is good. Beginning the OTA update, this may take a while...");
 
-                // Initialize progress tracking
                 currentProgress.totalBytes = contentLength;
                 currentProgress.currentBytes = 0;
                 currentProgress.percentage = 0;
 
-                // Set up progress callback
                 Update.onProgress(onProgress);
 
                 if (Update.begin(contentLength))
